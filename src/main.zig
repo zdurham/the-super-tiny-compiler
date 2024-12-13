@@ -146,12 +146,7 @@ pub fn main() !void {
     defer allocator.free(tokens);
 }
 
-fn checkToken(actual: Token, expected: Token) !void {
-    try std.testing.expectEqualStrings(actual.value, expected.value);
-    try std.testing.expectEqual(actual.type, expected.type);
-}
-
-test "tokenizing add" {
+test "tokenizer" {
     const input = "(add 12 34)";
     const expectedTokens = [_]Token{
         Token{ .type = TokenType.lparen, .value = "(" },
@@ -166,7 +161,5 @@ test "tokenizing add" {
         return;
     };
     defer allocator.free(tokens);
-    for (tokens, 0..) |token, idx| {
-        try checkToken(token, expectedTokens[idx]);
-    }
+    try std.testing.expectEqualDeep(expectedTokens[0..], tokens);
 }
