@@ -16,7 +16,6 @@ fn isDigit(ch: u8) bool {
 pub fn tokenizer(allocator: mem.Allocator, input: []const u8) ![]Token {
     var current: u32 = 0;
     var tokens = std.ArrayList(Token).init(allocator);
-    // defer tokens.deinit();
     while (current < input.len) {
         const char = input[current];
         const token = switch (char) {
@@ -83,67 +82,91 @@ pub const LiteralType = enum {
 
 pub const Literal = struct { value: []const u8, type: LiteralType };
 
-pub const CallExpression = struct { name: []const u8, params: []Node };
+pub const CallExpression = struct { name: []const u8, params: []const Node };
 
-pub const Program = struct { body: []Node };
+pub const Program = struct { body: []const Node };
 
 pub const Parser = struct {
     const Self = @This();
     current: u8 = 0,
-    program: Program,
     tokens: []Token,
-    pub fn init(tokens: []Token) void {
+    pub fn init(tokens: []Token) Self {
         return Self{ .current = 0, .tokens = tokens };
     }
 
-    pub fn parse(self: *Self) []Node {
-        const body = std.ArrayList(Node).init(std.heap.page_allocator);
+    pub fn parse(self: *Self) !Node {
+        var body = std.ArrayList(Node).init(std.heap.page_allocator);
+        errdefer body.deinit();
         while (self.current < self.tokens.len) {
-            body.append(self.walk());
+            const expression = self.walk() catch {
+                break;
+            };
+            try body.append(expression);
         }
-        return .{.program{ .body = body.toOwnedSlice() }};
+        return .{
+            .program = Program{
+                .body = try body.toOwnedSlice(),
+                // .body = &[_]Node{},
+            },
+        };
     }
 
     pub fn walk(
         self: *Self,
-    ) Node {
+    ) !Node {
         var token = self.tokens[self.current];
-        switch (token.type) {
+
+        const expression = switch (token.type) {
             TokenType.lparen => blk: {
-                const params = std.ArrayList(Node).init(std.heap.page_allocator);
+                var params = std.ArrayList(Node).init(std.heap.page_allocator);
+                errdefer params.deinit();
 
                 // bypass first parenthesis token (
                 // since we don't need to record it as a node
                 self.current += 1;
                 token = self.tokens[self.current];
                 const name = token.value;
+                self.current += 1;
+                token = self.tokens[self.current];
                 while (token.type != TokenType.rparen) {
-                    try params.append(self.walk());
+                    const expression = self.walk() catch {
+                        break;
+                    };
+                    try params.append(expression);
+                    token = self.tokens[self.current];
                 }
                 // skip closing parenthesis now
                 self.current += 1;
-                break :blk Node{ .callExpression = CallExpression{
-                    .name = name,
-                    .params = params.toOwnedSlice(),
-                } };
+                break :blk Node{
+                    .callExpression = CallExpression{
+                        .name = name,
+                        .params = try params.toOwnedSlice(),
+                    },
+                };
             },
-            TokenType.number | TokenType.string => blk: {
+            TokenType.number, TokenType.string => blk: {
                 self.current += 1;
                 const literalType = if (token.type == TokenType.string) LiteralType.string else LiteralType.number;
                 break :blk Node{ .literal = Literal{ .value = token.value, .type = literalType } };
             },
-        }
+            else => error.Oops,
+        };
+        return expression;
     }
 };
 
 pub fn main() !void {
-    const input = "add(12 34) (123) \"ok\"   (1)(5678) \"ok\"";
+    const input = "(add 1 (subtract 5 2))";
     const allocator = std.heap.page_allocator;
     const tokens = tokenizer(allocator, input) catch |err| {
-        std.debug.print("something bad happened: {any}", .{err});
+        std.log.err("Tokenizer blew up: {any}", .{err});
         return;
     };
     defer allocator.free(tokens);
+    var parser = Parser.init(tokens);
+    const ast = try parser.parse();
+    std.log.info("{any}", .{ast.program.body[0].callExpression.params});
+    std.log.debug("{}", .{@TypeOf(ast.program.body)});
 }
 
 test "tokenizer" {
@@ -162,4 +185,50 @@ test "tokenizer" {
     };
     defer allocator.free(tokens);
     try std.testing.expectEqualDeep(expectedTokens[0..], tokens);
+}
+
+test "parser" {
+    const input = "(add 1 (subtract5 2))";
+
+    var start: usize = 0;
+    _ = &start;
+    const subtractParams = [_]Node{
+        Node{ .literal = Literal{ .type = LiteralType.number, .value = "5" } },
+        Node{
+            .literal = Literal{ .type = LiteralType.number, .value = "2" },
+        },
+    };
+    //
+    const addParams = [_]Node{
+        Node{
+            .literal = Literal{ .type = LiteralType.number, .value = "1" },
+        },
+        Node{
+            .callExpression = CallExpression{
+                .name = "subtract",
+                .params = subtractParams[start..],
+            },
+        },
+    };
+    const body = [_]Node{
+        Node{
+            .callExpression = CallExpression{
+                .name = "add",
+                .params = addParams[start..],
+            },
+        },
+    };
+
+    const expectedProgram = Node{
+        .program = Program{ .body = body[start..] },
+    };
+    const allocator = std.heap.page_allocator;
+    const tokens = tokenizer(allocator, input) catch |err| {
+        std.debug.print("something bad happened: {any}", .{err});
+        return;
+    };
+    defer allocator.free(tokens);
+    var parser = Parser.init(tokens);
+    const ast = try parser.parse();
+    try std.testing.expectEqualDeep(expectedProgram, ast);
 }
