@@ -1,4 +1,4 @@
-# The super tiny compiler (in ZIG)
+# The super tiny compiler (in zig)
 
 This is a re-implementation (without the AST transformation step) of the [super tiny compiler](https://github.com/jamiebuilds/the-super-tiny-compiler). 
 
